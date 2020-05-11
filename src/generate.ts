@@ -188,19 +188,19 @@ function getTsOperationOptionsInterface(operation: IOperation, options: IGenerat
   out += `export interface ${getTsOperationOptionsInterfaceName(operation)} extends IOperationOptions {`;
 
   if (body) {
-    const bodyRequired = operation.parameters.filter(o => o.type === 'body').some(o => o.required);
+    const bodyRequired = operation.parameters.filter(o => o.paramType === 'body').some(o => o.required);
 
     out += `\n  body${bodyRequired ? '' : '?'}: {${body}\n  };\n`;
   }
 
   if (query) {
-    const queryRequired = operation.parameters.filter(o => o.type === 'query').some(o => o.required);
+    const queryRequired = operation.parameters.filter(o => o.paramType === 'query').some(o => o.required);
 
     out += `\n  query${queryRequired ? '' : '?'}: {${query}\n  };`;
   }
 
   if (params) {
-    const paramsRequired = operation.parameters.filter(o => o.type === 'path').some(o => o.required);
+    const paramsRequired = operation.parameters.filter(o => o.paramType === 'path').some(o => o.required);
 
     out += `\n  params${paramsRequired ? '' : '?'}: {${params}\n  };`;
   }
