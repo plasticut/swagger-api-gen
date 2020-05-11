@@ -1,6 +1,6 @@
 import fetch from "node-fetch";
-import * as fs from 'fs';
-import { ISchemaApi, IApi, IModel, IModelProperty, ModelID, IOperation } from "./swagger.interfaces";
+import * as fs from "fs";
+import { ISchemaApi, IApi, IModel, IModelProperty, ModelID, IOperation, IParameter } from "./swagger.interfaces";
 
 async function getJson(path: string): Promise<unknown> {
   const cachePath = `./cache`;
@@ -10,19 +10,21 @@ async function getJson(path: string): Promise<unknown> {
 
   let data;
 
+  let exists = false;
   try {
     await fs.promises.access(filename);
+    exists = true;
+    // eslint-disable-next-line no-empty
+  } catch (err) {
+  }
 
+  if (exists) {
     data = await fs.promises.readFile(filename);
 
     data = JSON.parse(data.toString());
-  } catch (err) {
-    console.log(err);
   }
 
   if (!data) {
-    console.log('Request', path);
-
     const res = await fetch(path);
 
     data = await res.json();
@@ -62,13 +64,25 @@ function mapType(type?: string): string {
   }
 }
 
-function getTsType(property: IModelProperty): string {
+function getTsPropertyType(property: IModelProperty): string {
   if (property.type === 'array' && property.items) {
-    return getTsType(property.items) + '[]';
+    return getTsPropertyType(property.items) + '[]';
   }
 
   if (property.$ref) {
     return getTsInterfaceName(property.$ref);
+  }
+
+  return mapType(property.type);
+}
+
+function getTsParameterType(property: IParameter): string {
+  if (property.enum) {
+    return property.enum.map(s => `'${s}'`).join(' | ');
+  }
+
+  if (property.paramType === 'body') {
+    return getTsInterfaceName(property.type);
   }
 
   return mapType(property.type);
@@ -99,16 +113,16 @@ function getTsInterface(model: IModel, options: IGenerateApisOptions): string {
     out += `\n`;
 
     if (property.description) {
-      out += `  // ${property.description}\n`;
+      out += `  // ${property.description}`;
     }
 
-    const type = getTsType(property);
+    const type =  getTsPropertyType(property);
     const required = model.required.includes(name) ? '' : '?';
 
-    out += `  ${name}${required}: ${type};\n`;
+    out += `\n  ${name}${required}: ${type};`;
   }
 
-  out += `}\n`;
+  out += `\n}`;
 
   return out;
 }
@@ -121,79 +135,42 @@ function uniq(items: string[]): string[] {
   return Array.from(new Set(items));
 }
 
+function getTsParam(parameter: IParameter): string {
+  const required = parameter.required ? '' : '?';
+  const type = getTsParameterType(parameter);
+
+  let out = '';
+  if (parameter.description) {
+    out += `\n    // ${parameter.description}`;
+  }
+  out += `\n    ${parameter.name}${required ? '' : '?'}: ${type};`;
+
+  return out;
+}
+
 function getTsOperationOptionsInterface(operation: IOperation, options: IGenerateApisOptions): string {
   let body = '';
   let query = '';
-  let path = '';
-
-  let bodyRequired = false;
-  let queryRequired = false;
+  let params = '';
 
   for (const param of operation.parameters) {
     if (param.paramType === 'body') {
-      body += `\n`;
-
-      if (param.description) {
-        body += `    // ${param.description}\n`;
-      }
-
-      const required = param.required ? '' : '?';
-      const type = getTsInterfaceName(param.type);
-
-      body += `    ${param.name}${required}: ${type};\n`;
-
-      if (param.required) {
-        bodyRequired = true;
-      }
+      body += getTsParam(param);
     }
 
     if (param.paramType === 'query') {
-      query += `\n`;
-
-      if (param.description) {
-        query += `    // ${param.description}\n`;
-      }
-
-      const required = param.required ? '' : '?';
-
-      let type;
-
-      if (param.enum) {
-        type = param.enum.map(s => `'${s}'`).join(' | ');
-      } else {
-        type = mapType(param.type);
-      }
-
-      query += `    ${param.name}${required}: ${type};\n`;
-
-      if (param.required) {
-        queryRequired = true;
-      }
+      query += getTsParam(param);
     }
 
     if (param.paramType === 'path') {
-      path += `\n`;
-
-      if (param.description) {
-        path += `    // ${param.description}\n`;
-      }
-
-      let type;
-
-      if (param.enum) {
-        type = param.enum.map(s => `'${s}'`).join(' | ');
-      } else {
-        type = mapType(param.type);
-      }
-
-      path += `    ${param.name}: ${type};\n`;
+      params += getTsParam(param);
     }
   }
 
   let out = '';
 
   if (options.splitInterfaces) {
-    out += 'import { IOperationOptions } from "../Api";\n';
+    out += 'import { IOperationOptions } from "../Api";';
 
     const interfaces = [
       ...operation.parameters
@@ -201,53 +178,155 @@ function getTsOperationOptionsInterface(operation: IOperation, options: IGenerat
         .map(param => getTsInterfaceName(param.type)),
     ];
 
-    out += uniq(interfaces).map(name => `import { ${name} } from "./${name}";\n`);
+    out += uniq(interfaces).map(name => `\nimport { ${name} } from "./${name}";`);
 
     if (out) {
-      out += '\n';
+      out += '\n\n';
     }
   }
 
   out += `export interface ${getTsOperationOptionsInterfaceName(operation)} extends IOperationOptions {`;
 
   if (body) {
-    out += `\n  body${bodyRequired ? '' : '?'}: {`;
-    out += body;
-    out += `  };\n`;
+    const bodyRequired = operation.parameters.filter(o => o.type === 'body').some(o => o.required);
+
+    out += `\n  body${bodyRequired ? '' : '?'}: {${body}\n  };\n`;
   }
 
   if (query) {
-    out += `\n  query${queryRequired ? '' : '?'}: {`;
+    const queryRequired = operation.parameters.filter(o => o.type === 'query').some(o => o.required);
+
+    out += `\n  query${queryRequired ? '' : '?'}: {${query}\n  };`;
+  }
+
+  if (params) {
+    const paramsRequired = operation.parameters.filter(o => o.type === 'path').some(o => o.required);
+
+    out += `\n  params${paramsRequired ? '' : '?'}: {${params}\n  };`;
+  }
+
+  out += '\n}';
+
+  return out;
+}
+
+function getJsDocParamType(parameter: IParameter): string {
+  if (parameter.paramType === 'body') {
+    return 'object'
+  }
+
+  return mapType(parameter.type);
+}
+
+function getJsDocParam(parameter: IParameter): string {
+  const t = `${getJsDocParamType(parameter)}`.padEnd(7);
+  const n = `${parameter.required ? ' ' : '['}${parameter.name}${parameter.required ? '' : ']'}`;
+
+  let d = parameter.description;
+
+  if (parameter.paramType === 'body') {
+    d += getTsInterfaceName(parameter.type);
+  }
+
+  if (parameter.enum) {
+    d += ' (' + parameter.enum.map(s => `'${s}'`).join('|') + ')';
+  }
+
+  return `\n   * @param   ${t} ${n} - ${d}`;
+}
+
+function getJsDocOperation(operation: IOperation): string {
+  let body = '';
+  let query = '';
+  let params = '';
+
+  for (const param of operation.parameters) {
+    if (param.paramType === 'body') {
+      body += getJsDocParam({
+        ...param,
+        name: `options.body.${param.name}`,
+      });
+    }
+
+    if (param.paramType === 'query') {
+      query += getJsDocParam({
+        ...param,
+        name: `options.query.${param.name}`,
+      });
+    }
+
+    if (param.paramType === 'path') {
+      params += getJsDocParam({
+        ...param,
+        name: `options.params.${param.name}`,
+      });
+    }
+  }
+
+  let out = '';
+
+  out += '  /**';
+  out += `\n   * ${operation.summary}`;
+  out += getJsDocParam({
+    name: `options`,
+    type: 'object',
+    required: operation.parameters.some(o => o.required),
+    description: getTsOperationOptionsInterfaceName(operation),
+  });
+
+  if (body) {
+    out += getJsDocParam({
+      name: `options.body`,
+      type: 'object',
+      required: operation.parameters.filter(o => o.type === 'body').some(o => o.required),
+      description: 'body params',
+    });
+
+    out += body;
+  }
+
+  if (query) {
+    out += getJsDocParam({
+      name: `options.query`,
+      type: 'object',
+      required: operation.parameters.filter(o => o.type === 'query').some(o => o.required),
+      description: 'query params',
+    });
+
     out += query;
-    out += `  };\n`;
   }
 
-  if (path) {
-    out += `\n  params: {`;
-    out += path;
-    out += `  };\n`;
+  if (params) {
+    out += getJsDocParam({
+      name: `options.params`,
+      type: 'object',
+      required: operation.parameters.filter(o => o.type === 'path').some(o => o.required),
+      description: 'path params',
+    });
+
+    out += params;
   }
 
-  out += '}\n';
+  out += `\n   * @returns Promise <${getTsInterfaceName(operation.type)}>`;
+  out += `\n   */`;
 
   return out;
 }
 
 function getTsOperation(operation: IOperation, url: string): string {
-  let out = '';
+  let out = getJsDocOperation(operation);
 
-  if (operation.summary) {
-    out += `  // ${operation.summary}\n`;
-  }
-  out += `  async ${unTitleCase(operation.nickname)}(options: ${getTsOperationOptionsInterfaceName(operation)}): Promise<${getTsInterfaceName(operation.type)}> {\n`;
-  out += `    return this.requestJson({ method: '${operation.method}', path: '${url}', ...options });\n`;
-  out += `  }\n`;
+  const required = operation.parameters.some(o => o.required);
+
+  out += `\n  async ${unTitleCase(operation.nickname)}(options${required ? '' : '?'}: ${getTsOperationOptionsInterfaceName(operation)}): Promise<${getTsInterfaceName(operation.type)}> {`;
+  out += `\n    return this.requestJson({ method: '${operation.method}', path: '${url}', ...options });`;
+  out += `\n  }`;
 
   return out;
 }
 
 function getTsApi(className: string, api: IApi, options: IGenerateApisOptions): string {
-  let out = `import { Api${options.splitInterfaces ? '' : ', IOperationOptions'} } from "./Api";\n`;
+  let out = `import { Api${options.splitInterfaces ? '' : ', IOperationOptions'} } from "./Api";`;
 
   if (options.splitInterfaces) {
     const interfaces = uniq(api.apis
@@ -263,12 +342,12 @@ function getTsApi(className: string, api: IApi, options: IGenerateApisOptions): 
       .map(name => `import { ${name} } from "./interfaces/${name}";`).join('\n');
   } else {
     for (const model of Object.values(api.models)) {
-      out += '\n' + getTsInterface(model, options);
+      out += '\n\n' + getTsInterface(model, options);
     }
 
     for (const { operations } of api.apis) {
       for (const operation of operations) {
-        out += '\n' + getTsOperationOptionsInterface(operation, options);
+        out += '\n\n' + getTsOperationOptionsInterface(operation, options);
       }
     }
   }
@@ -280,18 +359,23 @@ function getTsApi(className: string, api: IApi, options: IGenerateApisOptions): 
   }
 
   out += `\nexport class ${className} extends Api {`;
+  out += `\n  /**`;
+  out += `\n   * Create instance`;
+  out += `\n   * @constructor`;
+  out += `\n   * @param {string} token - OAuth token`;
+  out += `\n   */`;
   out += `\n  constructor(token: string) {`;
   out += `\n    super({ url: '${api.basePath}', token });`;
-  out += `\n  }\n`;
+  out += `\n  }`;
 
   for (const { operations, path } of api.apis) {
     for (const operation of operations) {
       out += '\n';
-      out += getTsOperation(operation, path);
+      out += '\n' + getTsOperation(operation, path);
     }
   }
 
-  out += '}\n';
+  out += '\n}\n';
 
   return out;
 }

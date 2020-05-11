@@ -23,9 +23,9 @@ export interface IModel {
 export interface IParameter {
   description: string;
   enum?: string[];
-  format: string;
+  format?: string;
   name: string;
-  paramType: ParamType;
+  paramType?: ParamType;
   required: boolean;
   type: string;
 }
