@@ -143,7 +143,7 @@ function getTsParam(parameter: IParameter): string {
   if (parameter.description) {
     out += `\n    // ${parameter.description}`;
   }
-  out += `\n    ${parameter.name}${required ? '' : '?'}: ${type};`;
+  out += `\n    ${parameter.name}${required}: ${type};`;
 
   return out;
 }
